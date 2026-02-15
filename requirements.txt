@@ -6,3 +6,4 @@ seaborn
 streamlit
 xgboost
 joblib
+altair.vegalite.v4
