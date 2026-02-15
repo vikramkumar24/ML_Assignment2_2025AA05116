@@ -117,11 +117,43 @@ This results in 30 features in total.
    ```
 
 2. **Run the Classification Script**:
+   
+   **Option A: Use Default Dataset**
    ```bash
    python ml_classification.py
    ```
+   
+   **Option B: Use Your Own CSV File**
+   ```bash
+   python ml_classification.py your_dataset.csv
+   ```
+   
+   The script will:
+   - ✅ Validate your dataset (12+ features, 500+ samples, 'target' column)
+   - 📊 Display dataset information and class distribution
+   - 🤖 Train all 6 models automatically
+   - 📈 Calculate all 6 evaluation metrics
+   - 💾 Save results to `[filename]_results.csv`
 
-3. **Output**:
+3. **Run the Interactive Streamlit Dashboard**:
+   ```bash
+   streamlit run streamlit_app.py
+   ```
+   
+   **Dashboard Features**:
+   - 📁 **Upload Your Own CSV**: Test models on custom datasets
+   - 📊 **Real-time Training**: Train any of the 6 models instantly
+   - 📈 **Visual Analytics**: Confusion matrices and ROC curves
+   - 🔍 **Dataset Preview**: Explore your data before training
+   - 💾 **Sample Template**: Download CSV template for reference
+   
+   **CSV Upload Requirements**:
+   - Must include a 'target' column
+   - Minimum 12 numeric features
+   - Minimum 500 instances
+   - Supports binary and multiclass classification
+
+4. **Output**:
    - Console output with detailed metrics for each model
    - `model_results.csv` - CSV file with all evaluation metrics
    - `breast_cancer_dataset.csv` - The dataset used for training
@@ -132,6 +164,7 @@ This results in 30 features in total.
 
 ```
 ├── ml_classification.py          # Main script with all 6 ML models
+├── streamlit_app.py               # Interactive web dashboard
 ├── requirements.txt               # Python dependencies
 ├── README.md                      # This file
 ├── breast_cancer_dataset.csv     # Dataset

@@ -55,59 +55,57 @@ st.markdown("""
 @st.cache_data
 def load_data():
     """Load the breast cancer dataset"""
-    df = pd.read_csv('breast_cancer_dataset.csv')
-    # Drop any completely-empty columns and unnamed columns
-    df = df.dropna(axis=1, how='all')
-    df = df.loc[:, ~df.columns.str.contains('^Unnamed')]
+    try:
+        df = pd.read_csv('breast_cancer_dataset.csv')
+        return df
+    except FileNotFoundError:
+        return None
 
-    # Ensure target exists (map from diagnosis if present)
-    if 'target' not in df.columns and 'diagnosis' in df.columns:
-        df['target'] = df['diagnosis'].map({'M': 1, 'B': 0})
 
-    # Keep identifier column out of features
-    if 'id' in df.columns:
-        df = df.drop(columns=['id'])
-
-    return df
+def validate_dataset(df):
+    """Validate uploaded dataset"""
+    errors = []
+    
+    # Check if dataset has target column
+    if 'target' not in df.columns:
+        errors.append("❌ Dataset must have a 'target' column")
+    
+    # Check minimum features (excluding target)
+    feature_cols = [col for col in df.columns if col != 'target']
+    if len(feature_cols) < 12:
+        errors.append(f"❌ Dataset must have at least 12 features (found {len(feature_cols)})")
+    
+    # Check minimum instances
+    if len(df) < 500:
+        errors.append(f"❌ Dataset must have at least 500 instances (found {len(df)})")
+    
+    # Check if target is binary or multiclass
+    unique_targets = df['target'].nunique()
+    if unique_targets < 2:
+        errors.append("❌ Target must have at least 2 classes")
+    
+    # Check for non-numeric columns (except target)
+    non_numeric = df[feature_cols].select_dtypes(exclude=[np.number]).columns.tolist()
+    if non_numeric:
+        errors.append(f"❌ All features must be numeric. Non-numeric columns: {', '.join(non_numeric)}")
+    
+    return errors
 
 
 @st.cache_data
 def prepare_data(df):
     """Prepare data for modeling"""
-    # Ensure 'target' exists (map from 'diagnosis' if necessary)
-    if 'target' not in df.columns and 'diagnosis' in df.columns:
-        df['target'] = df['diagnosis'].map({'M': 1, 'B': 0})
-
-    # Drop any completely-empty columns and unnamed columns
-    df = df.dropna(axis=1, how='all')
-    df = df.loc[:, ~df.columns.str.contains('^Unnamed')]
-
-    # Remove identifier and non-feature columns if present
-    drop_cols = [c for c in ['id', 'diagnosis'] if c in df.columns]
-
-    # Build X and y safely
-    if 'target' in df.columns:
-        X = df.drop(drop_cols + ['target'], axis=1, errors='ignore')
-        y = df['target']
-    else:
-        # Fallback: assume last column is target
-        X = df.iloc[:, :-1]
-        y = df.iloc[:, -1]
-
-    # Drop rows with missing values to avoid estimator errors
-    combined = pd.concat([X, y], axis=1)
-    combined = combined.dropna()
-    y = combined.iloc[:, -1]
-    X = combined.drop(combined.columns[-1], axis=1)
-
+    X = df.drop('target', axis=1)
+    y = df['target']
+    
     X_train, X_test, y_train, y_test = train_test_split(
         X, y, test_size=0.2, random_state=42, stratify=y
     )
-
+    
     scaler = StandardScaler()
     X_train_scaled = scaler.fit_transform(X_train)
     X_test_scaled = scaler.transform(X_test)
-
+    
     return X_train_scaled, X_test_scaled, y_train, y_test
 
 
@@ -128,24 +126,58 @@ def train_model(model_name, X_train, y_train):
 
 
 def calculate_metrics(y_true, y_pred, y_pred_proba):
-    """Calculate all evaluation metrics"""
-    return {
+    """Calculate all evaluation metrics for binary or multiclass"""
+    n_classes = len(np.unique(y_true))
+    
+    metrics = {
         'Accuracy': accuracy_score(y_true, y_pred),
-        'AUC Score': roc_auc_score(y_true, y_pred_proba),
-        'Precision': precision_score(y_true, y_pred),
-        'Recall': recall_score(y_true, y_pred),
-        'F1 Score': f1_score(y_true, y_pred),
         'MCC Score': matthews_corrcoef(y_true, y_pred)
     }
+    
+    # Handle binary vs multiclass
+    if n_classes == 2:
+        # Binary classification - use probabilities for positive class
+        if len(y_pred_proba.shape) > 1:
+            y_pred_proba_binary = y_pred_proba[:, 1]
+        else:
+            y_pred_proba_binary = y_pred_proba
+            
+        metrics.update({
+            'AUC Score': roc_auc_score(y_true, y_pred_proba_binary),
+            'Precision': precision_score(y_true, y_pred, average='binary'),
+            'Recall': recall_score(y_true, y_pred, average='binary'),
+            'F1 Score': f1_score(y_true, y_pred, average='binary')
+        })
+    else:
+        # Multiclass classification - use weighted average
+        try:
+            metrics['AUC Score'] = roc_auc_score(y_true, y_pred_proba, 
+                                                  multi_class='ovr', average='weighted')
+        except:
+            metrics['AUC Score'] = 0.0  # If AUC calculation fails
+            
+        metrics.update({
+            'Precision': precision_score(y_true, y_pred, average='weighted', zero_division=0),
+            'Recall': recall_score(y_true, y_pred, average='weighted', zero_division=0),
+            'F1 Score': f1_score(y_true, y_pred, average='weighted', zero_division=0)
+        })
+    
+    return metrics
+
 
 
 def plot_confusion_matrix(y_true, y_pred):
     """Plot confusion matrix"""
     cm = confusion_matrix(y_true, y_pred)
+    n_classes = len(np.unique(y_true))
+    
+    # Create dynamic labels
+    class_labels = [f'Class {i}' for i in range(n_classes)]
+    
     fig, ax = plt.subplots(figsize=(8, 6))
     sns.heatmap(cm, annot=True, fmt='d', cmap='Blues', 
-                xticklabels=['Malignant', 'Benign'],
-                yticklabels=['Malignant', 'Benign'])
+                xticklabels=class_labels,
+                yticklabels=class_labels)
     plt.ylabel('Actual')
     plt.xlabel('Predicted')
     plt.title('Confusion Matrix')
@@ -153,9 +185,29 @@ def plot_confusion_matrix(y_true, y_pred):
 
 
 def plot_roc_curve(y_true, y_pred_proba):
-    """Plot ROC curve"""
-    fpr, tpr, _ = roc_curve(y_true, y_pred_proba)
-    auc_score = roc_auc_score(y_true, y_pred_proba)
+    """Plot ROC curve - binary only"""
+    n_classes = len(np.unique(y_true))
+    
+    if n_classes > 2:
+        # For multiclass, show a message instead
+        fig, ax = plt.subplots(figsize=(8, 6))
+        plt.text(0.5, 0.5, 'ROC Curve\nNot available for\nmulticlass classification', 
+                ha='center', va='center', fontsize=16)
+        plt.xlim([0, 1])
+        plt.ylim([0, 1])
+        plt.xlabel('False Positive Rate')
+        plt.ylabel('True Positive Rate')
+        plt.title('ROC Curve (Binary Only)')
+        return fig
+    
+    # Binary classification
+    if len(y_pred_proba.shape) > 1:
+        y_pred_proba_binary = y_pred_proba[:, 1]
+    else:
+        y_pred_proba_binary = y_pred_proba
+        
+    fpr, tpr, _ = roc_curve(y_true, y_pred_proba_binary)
+    auc_score = roc_auc_score(y_true, y_pred_proba_binary)
     
     fig, ax = plt.subplots(figsize=(8, 6))
     plt.plot(fpr, tpr, color='blue', lw=2, 
@@ -177,9 +229,88 @@ def main():
     # Header
     st.markdown('<p class="main-header">🧬 ML Classification Dashboard</p>', 
                 unsafe_allow_html=True)
-    st.markdown("### Breast Cancer Wisconsin Dataset - Binary Classification")
+    st.markdown("### Machine Learning Classification - Binary/Multiclass")
     
-    # Sidebar
+    # Sidebar - Dataset Source
+    st.sidebar.title("📁 Dataset Source")
+    st.sidebar.markdown("---")
+    
+    dataset_source = st.sidebar.radio(
+        "Choose dataset:",
+        ["Use Default Dataset", "Upload CSV File"]
+    )
+    
+    uploaded_file = None
+    df = None
+    dataset_name = "Breast Cancer Wisconsin"
+    
+    if dataset_source == "Upload CSV File":
+        st.sidebar.markdown("---")
+        st.sidebar.markdown("**📋 Dataset Requirements:**")
+        st.sidebar.info("""
+        - Must have a 'target' column
+        - Minimum 12 features
+        - Minimum 500 instances
+        - All features must be numeric
+        - Target can be binary or multiclass
+        """)
+        
+        uploaded_file = st.sidebar.file_uploader(
+            "Upload your CSV file",
+            type=['csv'],
+            help="Upload a CSV file with features and a 'target' column"
+        )
+        
+        if uploaded_file is not None:
+            try:
+                df = pd.read_csv(uploaded_file)
+                dataset_name = uploaded_file.name.replace('.csv', '')
+                
+                # Validate dataset
+                errors = validate_dataset(df)
+                
+                if errors:
+                    st.sidebar.error("**Dataset Validation Failed:**")
+                    for error in errors:
+                        st.sidebar.error(error)
+                    st.error("Please upload a valid dataset that meets the requirements.")
+                    st.stop()
+                else:
+                    st.sidebar.success("✅ Dataset validated successfully!")
+                    
+            except Exception as e:
+                st.sidebar.error(f"Error reading file: {str(e)}")
+                st.error("Failed to load the uploaded file. Please check the format.")
+                st.stop()
+        else:
+            st.info("👆 Please upload a CSV file from the sidebar to get started.")
+            st.markdown("---")
+            st.markdown("### 📋 Sample Dataset Format")
+            st.markdown("""
+            Your CSV file should look like this:
+            
+            | feature_1 | feature_2 | feature_3 | ... | feature_n | target |
+            |-----------|-----------|-----------|-----|-----------|--------|
+            | 0.5       | 1.2       | 3.4       | ... | 2.1       | 0      |
+            | 0.8       | 1.5       | 2.9       | ... | 3.2       | 1      |
+            
+            **Requirements:**
+            - ✅ At least 12 numeric features
+            - ✅ At least 500 rows
+            - ✅ A 'target' column with class labels (0, 1, 2, etc.)
+            - ✅ No missing values or handle them before upload
+            """)
+            st.stop()
+    else:
+        # Load default dataset
+        with st.spinner("Loading default dataset..."):
+            df = load_data()
+            if df is None:
+                st.error("Default dataset not found. Please upload your own CSV file.")
+                st.stop()
+    
+    # Sidebar - Model Selection
+    st.sidebar.markdown("---")
     st.sidebar.title("📊 Model Selection")
     st.sidebar.markdown("---")
     
@@ -190,31 +321,52 @@ def main():
     )
     
     st.sidebar.markdown("---")
-    st.sidebar.info("""
-    **About Dataset:**
-    - 569 samples
-    - 30 features
-    - Binary classification
-    - Target: Malignant (0) or Benign (1)
+    
+    # Dataset info in sidebar
+    feature_count = len([col for col in df.columns if col != 'target'])
+    target_classes = df['target'].nunique()
+    class_type = "Binary" if target_classes == 2 else f"Multiclass ({target_classes} classes)"
+    
+    st.sidebar.info(f"""
+    **Dataset: {dataset_name}**
+    - {len(df)} samples
+    - {feature_count} features
+    - {class_type} classification
     """)
     
     # Load and prepare data
-    with st.spinner("Loading data..."):
-        df = load_data()
+    with st.spinner("Preparing data..."):
         X_train, X_test, y_train, y_test = prepare_data(df)
     
     # Dataset overview
     st.markdown("## 📈 Dataset Overview")
     col1, col2, col3, col4 = st.columns(4)
     
+    target_counts = df['target'].value_counts().sort_index()
+    
     with col1:
         st.metric("Total Samples", len(df))
     with col2:
         st.metric("Features", df.shape[1] - 1)
     with col3:
-        st.metric("Benign Cases", sum(df['target'] == 1))
+        st.metric(f"Class 0", int(target_counts.iloc[0]))
     with col4:
-        st.metric("Malignant Cases", sum(df['target'] == 0))
+        if len(target_counts) > 1:
+            st.metric(f"Class 1", int(target_counts.iloc[1]))
+        else:
+            st.metric("Classes", len(target_counts))
+    
+    # Show dataset preview
+    with st.expander("👁️ View Dataset Preview"):
+        st.dataframe(df.head(10))
+        st.markdown(f"**Shape:** {df.shape[0]} rows × {df.shape[1]} columns")
+        
+        # Show class distribution
+        st.markdown("**Class Distribution:**")
+        class_dist = df['target'].value_counts().sort_index()
+        for cls, count in class_dist.items():
+            percentage = (count / len(df)) * 100
+            st.write(f"- Class {cls}: {count} samples ({percentage:.1f}%)")
     
     st.markdown("---")
     
@@ -283,11 +435,46 @@ def main():
     except FileNotFoundError:
         st.warning("Run ml_classification.py first to generate comparison results.")
     
+    # Add sample dataset download
+    st.markdown("---")
+    st.markdown("## 📥 Need Sample Data?")
+    
+    col1, col2 = st.columns(2)
+    with col1:
+        if st.button("📄 Download Sample CSV Template"):
+            # Create a sample CSV
+            sample_data = {
+                'feature_1': np.random.rand(100),
+                'feature_2': np.random.rand(100),
+                'feature_3': np.random.rand(100),
+                'feature_4': np.random.rand(100),
+                'feature_5': np.random.rand(100),
+                'feature_6': np.random.rand(100),
+                'feature_7': np.random.rand(100),
+                'feature_8': np.random.rand(100),
+                'feature_9': np.random.rand(100),
+                'feature_10': np.random.rand(100),
+                'feature_11': np.random.rand(100),
+                'feature_12': np.random.rand(100),
+                'target': np.random.randint(0, 2, 100)
+            }
+            sample_df = pd.DataFrame(sample_data)
+            csv = sample_df.to_csv(index=False)
+            st.download_button(
+                label="💾 Download Sample Template",
+                data=csv,
+                file_name="sample_classification_data.csv",
+                mime="text/csv"
+            )
+    
+    with col2:
+        st.info("Use this template to understand the required CSV format. Modify it with your own data!")
+    
     # Footer
     st.markdown("---")
-    st.markdown("""
+    st.markdown(f"""
     <div style='text-align: center; color: gray;'>
-        <p>Built with Streamlit | Breast Cancer Wisconsin Dataset</p>
+        <p>Built with Streamlit | Dataset: {dataset_name}</p>
     </div>
     """, unsafe_allow_html=True)
 
